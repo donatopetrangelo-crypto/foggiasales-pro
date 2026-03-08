@@ -1,102 +1,99 @@
+
+
+   
+
+   
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Route, X, Play, Navigation, MapPin, Loader2, Star, Clock, Trash2 } from 'lucide-react'
-import { PageHeader, StarRating, StatusBadge, Spinner, EmptyState } from '../components/ui'
+import { Route, X, Navigation, MapPin, Loader2, Trash2, Star } from 'lucide-react'
+import { StarRating, Spinner } from '../components/ui'
 import { useAppStore } from '../store/appStore'
 import { useClients } from '../hooks/useClients'
-import { initMap, optimizeRoute } from '../lib/googleMaps'
-import { CATEGORIES } from '../lib/constants'
+import { initMap, addMarkers, drawRoute, optimizeRoute } from '../lib/googleMaps'
 
 export default function RoutePage() {
-  const { routeClients, removeFromRoute, clearRoute } = useAppStore()
+  const { routeClients, removeFromRoute, clearRoute, addToRoute } = useAppStore()
   const { data: allClients = [] } = useClients()
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
   const markersRef = useRef([])
-  const [mapLoaded, setMapLoaded] = useState(false)
+  const polylineRef = useRef(null)
+  const [mapReady, setMapReady] = useState(false)
+  const [mapError, setMapError] = useState(false)
   const [optimizing, setOptimizing] = useState(false)
   const [routeResult, setRouteResult] = useState(null)
-  const [mapError, setMapError] = useState(false)
-  const [steps, setSteps] = useState([])
 
-  // Init map
+  // Init map once
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return
+    let cancelled = false
     initMap(mapRef.current)
-      .then(({ map, directionsRenderer }) => {
-        mapInstance.current = { map, directionsRenderer }
-        setMapLoaded(true)
+      .then(({ map, L }) => {
+        if (cancelled) return
+        mapInstance.current = { map, L }
+        setMapReady(true)
       })
-      .catch(() => setMapError(true))
+      .catch(e => {
+        console.error('Map init error:', e)
+        setMapError(true)
+      })
+    return () => { cancelled = true }
   }, [])
 
-  // Place markers for route clients
+  // Update markers when route changes
   useEffect(() => {
-    if (!mapLoaded || !mapInstance.current) return
-    const { map } = mapInstance.current
-
-    // Clear old markers
-    markersRef.current.forEach(m => m.setMap(null))
+    if (!mapReady || !mapInstance.current) return
+    const { map, L } = mapInstance.current
+    // Remove old markers safely
+    markersRef.current.forEach(m => { try { m.remove() } catch(e) {} })
     markersRef.current = []
+    if (routeClients.length > 0) {
+      try {
+        markersRef.current = addMarkers(map, L, routeClients)
+        // Fit map to markers
+        const validClients = routeClients.filter(c => c.lat && c.lng)
+        if (validClients.length > 0) {
+          const bounds = L.latLngBounds(validClients.map(c => [c.lat, c.lng]))
+          map.fitBounds(bounds, { padding: [40, 40] })
+        }
+      } catch(e) {
+        console.error('Marker error:', e)
+      }
+    }
+  }, [routeClients, mapReady])
 
-    routeClients.forEach((client, i) => {
-      if (!client.lat || !client.lng) return
-      const marker = new google.maps.Marker({
-        position: { lat: client.lat, lng: client.lng },
-        map,
-        title: client.name,
-        label: {
-          text: String(i + 1),
-          color: 'white',
-          fontSize: '12px',
-          fontWeight: 'bold',
-        },
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          fillColor: '#0c87e8',
-          fillOpacity: 1,
-          strokeColor: '#ffffff',
-          strokeWeight: 2,
-          scale: 16,
-        },
-      })
-      markersRef.current.push(marker)
-    })
-  }, [routeClients, mapLoaded])
-
-  async function handleOptimize() {
+  function handleOptimize() {
     const withCoords = routeClients.filter(c => c.lat && c.lng)
     if (withCoords.length < 2) return
-
     setOptimizing(true)
     try {
-      const result = await optimizeRoute(withCoords)
-      mapInstance.current.directionsRenderer.setDirections(result)
-
-      // Extract steps
-      const allSteps = result.routes[0].legs.flatMap(leg => leg.steps)
-      setSteps(allSteps)
-
-      const totalDist = result.routes[0].legs.reduce((acc, l) => acc + l.distance.value, 0)
-      const totalTime = result.routes[0].legs.reduce((acc, l) => acc + l.duration.value, 0)
-      setRouteResult({
-        distance: (totalDist / 1000).toFixed(1),
-        duration: Math.round(totalTime / 60),
-      })
-    } catch (e) {
-      console.error(e)
+      const { map, L } = mapInstance.current
+      if (polylineRef.current) { try { polylineRef.current.remove() } catch(e) {} }
+      const { orderedClients, totalKm } = optimizeRoute(withCoords)
+      polylineRef.current = drawRoute(map, L, orderedClients)
+      setRouteResult({ distance: totalKm, duration: Math.round(totalKm * 2) })
+    } catch(e) {
+      console.error('Optimize error:', e)
     } finally {
       setOptimizing(false)
     }
   }
 
-  // Quick-add clients with high value score
+  function handleAddToRoute(client) {
+    try {
+      addToRoute(client)
+    } catch(e) {
+      console.error('Add to route error:', e)
+    }
+  }
+
   const topClients = allClients
-    .filter(c => c.value_score >= 4 && !routeClients.find(r => r.id === c.id))
-    .slice(0, 5)
+    .filter(c => (c.value_score || 0) >= 3 && !routeClients.find(r => r.id === c.id))
+    .sort((a, b) => (b.value_score || 0) - (a.value_score || 0))
+    .slice(0, 8)
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar panel */}
+      {/* Sidebar */}
       <div className="w-80 flex-shrink-0 flex flex-col border-r border-slate-800/60 bg-slate-900/50 overflow-hidden">
         <div className="p-4 border-b border-slate-800/60">
           <h1 className="font-display font-bold text-lg text-slate-100 flex items-center gap-2">
@@ -105,17 +102,17 @@ export default function RoutePage() {
           <p className="text-xs text-slate-500 mt-0.5">{routeClients.length} fermate nel percorso</p>
         </div>
 
-        {/* Route clients list */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {/* Route clients */}
           {routeClients.length === 0 ? (
-            <div className="py-8 text-center">
+            <div className="py-6 text-center">
               <MapPin size={24} className="text-slate-700 mx-auto mb-2" />
               <p className="text-sm text-slate-600">Nessun cliente nel percorso</p>
-              <p className="text-xs text-slate-700 mt-1">Aggiungili dal CRM o dai suggeriti qui sotto</p>
+              <p className="text-xs text-slate-700 mt-1">Aggiungili dai suggeriti qui sotto</p>
             </div>
           ) : (
             routeClients.map((client, i) => (
-              <div key={client.id} className="card p-3 flex items-start gap-2">
+              <div key={client.id || i} className="card p-3 flex items-start gap-2">
                 <div className="w-6 h-6 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center text-xs font-bold text-brand-400 flex-shrink-0">
                   {i + 1}
                 </div>
@@ -124,26 +121,33 @@ export default function RoutePage() {
                   <p className="text-xs text-slate-500">{client.city}</p>
                   <StarRating score={client.value_score || 0} size={10} />
                 </div>
-                <button onClick={() => removeFromRoute(client.id)} className="text-slate-600 hover:text-red-400 transition-colors p-1">
+                <button
+                  onClick={() => removeFromRoute(client.id)}
+                  className="text-slate-600 hover:text-red-400 transition-colors p-1 flex-shrink-0"
+                >
                   <X size={13} />
                 </button>
               </div>
             ))
           )}
 
-          {/* Top value suggestions */}
+          {/* Suggestions */}
           {topClients.length > 0 && (
-            <div className="pt-3 mt-1">
+            <div className="pt-3">
               <p className="text-[10px] text-slate-600 uppercase tracking-wider font-medium px-1 mb-2">
-                ⭐ Clienti ad alto valore — aggiungi al percorso
+                ⭐ Clienti suggeriti — clicca per aggiungere
               </p>
               {topClients.map(c => (
-                <div key={c.id} className="flex items-center gap-2 py-1.5 px-1 hover:bg-slate-800/40 rounded-lg cursor-pointer group"
-                  onClick={() => useAppStore.getState().addToRoute(c)}>
+                <button
+                  key={c.id}
+                  onClick={() => handleAddToRoute(c)}
+                  className="w-full flex items-center gap-2 py-2 px-2 hover:bg-slate-800/60 rounded-lg transition-colors text-left"
+                >
                   <div className="w-1.5 h-1.5 rounded-full bg-accent-500 flex-shrink-0" />
-                  <span className="text-xs text-slate-400 flex-1 truncate group-hover:text-slate-200">{c.name}</span>
-                  <StarRating score={c.value_score} size={9} />
-                </div>
+                  <span className="text-xs text-slate-400 flex-1 truncate hover:text-slate-200">{c.name}</span>
+                  <span className="text-xs text-slate-600">{c.city}</span>
+                  <StarRating score={c.value_score || 0} size={9} />
+                </button>
               ))}
             </div>
           )}
@@ -152,7 +156,7 @@ export default function RoutePage() {
         {/* Actions */}
         <div className="p-3 border-t border-slate-800/60 space-y-2">
           {routeResult && (
-            <div className="card p-3 grid grid-cols-2 gap-2 text-center mb-2">
+            <div className="card p-3 grid grid-cols-2 gap-2 text-center">
               <div>
                 <p className="text-xs text-slate-500">Distanza</p>
                 <p className="font-display font-bold text-slate-100">{routeResult.distance} km</p>
@@ -165,7 +169,7 @@ export default function RoutePage() {
           )}
           <button
             onClick={handleOptimize}
-            disabled={routeClients.filter(c => c.lat).length < 2 || optimizing}
+            disabled={routeClients.length < 2 || optimizing}
             className="btn-primary w-full justify-center"
           >
             {optimizing ? <Loader2 size={15} className="animate-spin" /> : <Navigation size={15} />}
@@ -178,18 +182,18 @@ export default function RoutePage() {
       </div>
 
       {/* Map */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative overflow-hidden">
         {mapError ? (
-          <div className="flex items-center justify-center h-full flex-col gap-3">
+          <div className="flex items-center justify-center h-full flex-col gap-3 bg-slate-900">
             <MapPin size={32} className="text-slate-600" />
-            <p className="text-slate-500 text-sm">Mappa non disponibile</p>
-            <p className="text-xs text-slate-600">Configura VITE_GOOGLE_MAPS_API_KEY nel file .env</p>
+            <p className="text-slate-500 text-sm">Errore caricamento mappa</p>
+            <p className="text-xs text-slate-600">Ricarica la pagina</p>
           </div>
         ) : (
           <>
-            <div ref={mapRef} className="w-full h-full" />
-            {!mapLoaded && (
-              <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80">
+            <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+            {!mapReady && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-950/90">
                 <div className="text-center">
                   <Spinner size={32} />
                   <p className="text-slate-500 text-sm mt-3">Caricamento mappa...</p>
