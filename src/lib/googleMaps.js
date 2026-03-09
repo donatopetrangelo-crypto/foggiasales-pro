@@ -153,3 +153,47 @@ export async function loadGoogleMaps() { return null }
 export async function getPlaceDetails() { return null }
 export { FOGGIA_CENTER }
 
+// ─── OpenRouteService — percorso stradale reale ───────────────────────────
+const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFlNDhiYzMzOGM1NjQ2NTI4OTQzM2Y2MzM3ODJjZDZiIiwiaCI6Im11cm11cjY0In0='
+
+export async function drawRealRoute(map, L, clients) {
+  const validClients = clients.filter(c => c.lat && c.lng)
+  if (validClients.length < 2) return null
+
+  const coordinates = validClients.map(c => [c.lng, c.lat])
+
+  try {
+    const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+      method: 'POST',
+      headers: {
+        'Authorization': ORS_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ coordinates }),
+    })
+
+    if (!response.ok) throw new Error('ORS API error')
+    const data = await response.json()
+
+    const coords = data.features[0].geometry.coordinates.map(c => [c[1], c[0]])
+    const summary = data.features[0].properties.summary
+
+    const polyline = L.polyline(coords, {
+      color: '#0c87e8',
+      weight: 4,
+      opacity: 0.9,
+    }).addTo(map)
+
+    map.fitBounds(polyline.getBounds(), { padding: [40, 40] })
+
+    return {
+      polyline,
+      distanceKm: (summary.distance / 1000).toFixed(1),
+      durationMin: Math.round(summary.duration / 60),
+    }
+  } catch(e) {
+    console.error('ORS error, fallback to straight line:', e)
+    const polyline = drawRoute(map, L, validClients)
+    return { polyline, distanceKm: null, durationMin: null }
+  }
+}
