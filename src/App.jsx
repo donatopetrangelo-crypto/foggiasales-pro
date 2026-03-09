@@ -6,6 +6,7 @@ import SearchPage from './pages/SearchPage'
 import CRMPage from './pages/CRMPage'
 import RoutePage from './pages/RoutePage'
 import AlertsPage from './pages/AlertsPage'
+import SettingsPage from './pages/SettingsPage'
 import LoginPage from './pages/LoginPage'
 import { supabase } from './lib/supabase'
 import { useAppStore } from './store/appStore'
@@ -37,23 +38,21 @@ export default function App() {
     )
   }
 
-  // Bypass auth in dev if no Supabase configured
   const isDev = import.meta.env.DEV && !import.meta.env.VITE_SUPABASE_URL?.includes('supabase.co')
   const isAuthenticated = !!user || isDev
 
-  if (!isAuthenticated) {
-    return <LoginPage />
-  }
+  if (!isAuthenticated) return <LoginPage />
 
   return (
     <AppShell>
       <Routes>
-        <Route path="/"        element={<DashboardPage />} />
-        <Route path="/search"  element={<SearchPage />} />
-        <Route path="/crm"     element={<CRMPage />} />
-        <Route path="/route"   element={<RoutePage />} />
-        <Route path="/alerts"  element={<AlertsPage />} />
-        <Route path="*"        element={<Navigate to="/" replace />} />
+        <Route path="/"          element={<DashboardPage />} />
+        <Route path="/search"    element={<SearchPage />} />
+        <Route path="/crm"       element={<CRMPage />} />
+        <Route path="/route"     element={<RoutePage />} />
+        <Route path="/alerts"    element={<AlertsPage />} />
+        <Route path="/settings"  element={<SettingsPage />} />
+        <Route path="*"          element={<Navigate to="/" replace />} />
       </Routes>
     </AppShell>
   )
