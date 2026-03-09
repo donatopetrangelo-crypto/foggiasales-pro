@@ -3,7 +3,7 @@ import { Route, X, Navigation, MapPin, Loader2, Trash2, ExternalLink } from 'luc
 import { StarRating, Spinner } from '../components/ui'
 import { useAppStore } from '../store/appStore'
 import { useClients } from '../hooks/useClients'
-import { initMap, addMarkers, drawRoute, optimizeRoute } from '../lib/googleMaps'
+import { initMap, addMarkers, drawRoute, optimizeRoute, drawRealRoute } from '../lib/googleMaps'
 
 export default function RoutePage() {
   const { routeClients, removeFromRoute, clearRoute, addToRoute } = useAppStore()
@@ -48,7 +48,7 @@ export default function RoutePage() {
     }
   }, [routeClients, mapReady])
 
-  function handleOptimize() {
+  async function handleOptimize() {
     const withCoords = routeClients.filter(c => c.lat && c.lng)
     if (withCoords.length < 2) return
     setOptimizing(true)
@@ -56,9 +56,16 @@ export default function RoutePage() {
       const { map, L } = mapInstance.current
       if (polylineRef.current) { try { polylineRef.current.remove() } catch(e) {} }
       const { orderedClients, totalKm } = optimizeRoute(withCoords)
-      polylineRef.current = drawRoute(map, L, orderedClients)
       setOptimizedOrder(orderedClients)
-      setRouteResult({ distance: totalKm, duration: Math.round(totalKm * 2) })
+      // Draw real road route via OpenRouteService
+      const result = await drawRealRoute(map, L, orderedClients)
+      if (result) {
+        polylineRef.current = result.polyline
+        setRouteResult({
+          distance: result.distanceKm || totalKm,
+          duration: result.durationMin || Math.round(totalKm * 2)
+        })
+      }
     } catch(e) {
       console.error(e)
     } finally {
